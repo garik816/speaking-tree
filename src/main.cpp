@@ -71,9 +71,9 @@ void mouthAnimation(void){
 
 
 void voice(void){
-  if (phrase!=0 && (!status || digitalRead(DFBusyPin)==false)){
-    status = true;
+  if (phrase!=0){
     voiceDFPlayer.play(phrase);
+    phrase=false;
   }
 }
 
@@ -112,22 +112,26 @@ void setup() {
 
 // the loop function runs over and over again forever
 void loop() {
-  if(status != 0){
+  if(digitalRead(DFBusyPin)==false){
     eyeBlinkAnimation();
     mouthAnimation();
+  }
+  else {
+    mouthServo.write(0);
+    eyeServo.write(0);
   }
 
   blink();
   voice();
   pultRead();
   commandErase();
-  // mouthAnimation();
-  // eyeBlinkAnimation();
-  Serial.print("\t command = ");
-  Serial.print(command, BIN);
-  Serial.print("\t phrase = ");
-  Serial.print(phrase);
-  Serial.print("\t status = ");
-  Serial.print(status);
-  Serial.println();
+  // // mouthAnimation();
+  // // eyeBlinkAnimation();
+  // Serial.print("\t command = ");
+  // Serial.print(command, BIN);
+  // Serial.print("\t phrase = ");
+  // Serial.print(phrase);
+  // Serial.print("\t status = ");
+  // Serial.print(status);
+  // Serial.println();
 }
