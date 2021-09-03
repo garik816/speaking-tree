@@ -13,6 +13,8 @@
 #define eyePin 11
 #define mouthPin 12
 
+#define feedbackSence 100
+
 static unsigned long timer = millis();
 static unsigned long eyeTimer = millis();
 static unsigned long commandTimer = millis();
@@ -115,6 +117,7 @@ void loop() {
   if(digitalRead(DFBusyPin)==false){
     eyeBlinkAnimation();
     mouthAnimation();
+    delay(feedbackSence);
   }
   else {
     mouthServo.write(0);
