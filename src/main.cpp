@@ -1,106 +1,175 @@
+// TODO:
+// переназначить все порты
+
 #include <Arduino.h>
-#include <TimerOne.h>
-#include <NewPing.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <ESP8266WebServer.h>
 #include "SoftwareSerial.h"
 #include "DFRobotDFPlayerMini.h"
 #include <Servo.h>
 
-#define ECHO 2
-#define TRIG 3
-#define sensVCC 4
-#define DFBusyPin 5 //digitalRead(DFBusyPin)=0 - busy;
+#ifndef APSSID
+#define APSSID "TREE"
+#define APPSK  "garik816"
+#endif
+
+#define DFBusyPin 6 //digitalRead(DFBusyPin)=0 - busy;
 #define feedback A0
+#define eyePin 11
 #define mouthPin 12
 
-static unsigned long timer = millis();
-static unsigned long timerDF = millis();
+#define feedbackSence 100
 
-bool DFplaying = false;
-bool DFNotBusy = false;
-int status = 0;
+static unsigned long timer = millis();
+static unsigned long eyeTimer = millis();
+static unsigned long commandTimer = millis();
+
+const char *ssid = APSSID;
+const char *password = APPSK;
+
+bool DFstatus = false;
 int phrase = 0;
+int eyePos = 0;
 int mouthPos = 0;
 
+IPAddress local_ip(192,168,1,1);
+IPAddress gateway(192,168,1,1);
+IPAddress subnet(255,255,255,0);
+
+ESP8266WebServer server(80);
+
 Servo mouthServo;
-NewPing sonar(TRIG, ECHO, 400);
+Servo eyeServo;
 SoftwareSerial DFplayerSoftwareSerial(7, 8); // RX, TX
 DFRobotDFPlayerMini voiceDFPlayer;
-
-float dist_3[3] = {0.0, 0.0, 0.0};   // массив для хранения трёх последних измерений
-float middle, dist, dist_filtered;
-float k;
-byte i, delta;
-unsigned long dispIsrTimer, sensTimer;
-
-float middle_of_3(float a, float b, float c) {
-  if ((a <= b) && (a <= c)) {
-    middle = (b <= c) ? b : c;
-  }
-  else {
-    if ((b <= a) && (b <= c)) {
-      middle = (a <= c) ? a : c;
-    }
-    else {
-      middle = (a <= b) ? a : b;
-    }
-  }
-  return middle;
-}
 
 void blink(void){
   if (millis() - timer > 1000) {
     timer = millis();
     digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-    DFNotBusy = digitalRead(DFBusyPin);
+    DFstatus = digitalRead(DFBusyPin);
   }
 }
 
-void distanceMeasure(void){
-  if (millis() - sensTimer > 100) {                          // измерение и вывод каждые 100 мс
-    if (i > 1) i = 0;
-    else i++;
-
-    dist_3[i] = (float)sonar.ping() / 57.5;                 // получить расстояние в текущую ячейку массива
-    dist = middle_of_3(dist_3[0], dist_3[1], dist_3[2]);    // фильтровать медианным фильтром из 3ёх последних измерений
-
-    delta = abs(dist_filtered - dist);                      // расчёт изменения с предыдущим
-    if (delta > 1) k = 0.7;                                 // если большое - резкий коэффициент
-    else k = 0.1;                                           // если маленькое - плавный коэффициент
-
-    dist_filtered = dist * k + dist_filtered * (1 - k);     // фильтр "бегущее среднее"
-
-
-
-    //Serial.println(dist_filtered);                          // вывести //debug
-    sensTimer = millis();                                   // сбросить таймер
+void eyeBlinkAnimation(void){
+  if (millis() - eyeTimer > 10000) {
+    eyeTimer = millis();
+    eyePos = 0;
+    eyeServo.write(eyePos);
+    Serial.println("eyeAnimClose"); //debug
+    delay(500);
   }
+  else eyePos = 120;
+  eyeServo.write(eyePos);
+  Serial.println("eyeAnimOpen"); //debug
 }
 
-void player(void){
-  if (status == 1 && phrase==1 && DFNotBusy == true){
-    voiceDFPlayer.play(phrase);
-  }
-  if (status == 1 && phrase==2 && DFNotBusy == true){
-    voiceDFPlayer.play(phrase);
-  }
-  if (status == 3 && phrase==3 && DFNotBusy == true){
-    voiceDFPlayer.play(phrase);
-  }
+void mouthAnimation(void){
+  mouthPos = map(analogRead(feedback), 0, 512, 0, 180);
+  mouthServo.write(mouthPos);
+  Serial.println("mAnim"); //debug
 }
 
 
+void voice(void){
+  if (phrase!=0){
+    voiceDFPlayer.play(phrase);
+    phrase=false;
+    Serial.println("voice"); //debug
+  }
+}
+
+String SendHTML(void)
+{
+  String ptr = "<!DOCTYPE html> <html>\n";
+  ptr +="<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+  ptr +="<title>Phrase Control</title>\n";
+  ptr +="<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}\n";
+  ptr +="body{margin-top: 50px;} h1 {color: #444444;margin: 50px auto 30px;} h3 {color: #444444;margin-bottom: 50px;}\n";
+  ptr +=".button {display: block;width: 80px;background-color: #1abc9c;border: none;color: white;padding: 13px 30px;text-decoration: none;font-size: 25px;margin: 0px auto 35px;cursor: pointer;border-radius: 4px;}\n";
+  ptr +=".button-on {background-color: #1abc9c;}\n";
+  ptr +=".button-on:active {background-color: #16a085;}\n";
+  ptr +=".button-off {background-color: #34495e;}\n";
+  ptr +=".button-off:active {background-color: #2c3e50;}\n";
+  ptr +="p {font-size: 14px;color: #888;margin-bottom: 10px;}\n";
+  ptr +="</style>\n";
+  ptr +="</head>\n";
+  ptr +="<body>\n";
+  ptr +="<fieldset><legend>control</legend>\n";
+  ptr +="<form method=\"get\" action=\"\">\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"001\" type=\"submit\" name=\"send_t\">Track 001</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"002\" type=\"submit\" name=\"send_t\">Track 002</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"003\" type=\"submit\" name=\"send_t\">Track 003</button><br><br>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"004\" type=\"submit\" name=\"send_t\">Track 004</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"005\" type=\"submit\" name=\"send_t\">Track 005</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"006\" type=\"submit\" name=\"send_t\">Track 006</button><br><br>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"007\" type=\"submit\" name=\"send_t\">Track 007</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"008\" type=\"submit\" name=\"send_t\">Track 008</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"009\" type=\"submit\" name=\"send_t\">Track 009</button><br><br>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"010\" type=\"submit\" name=\"send_t\">Track 010</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"011\" type=\"submit\" name=\"send_t\">Track 011</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"012\" type=\"submit\" name=\"send_t\">Track 012</button><br><br>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"013\" type=\"submit\" name=\"send_t\">Track 013</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"014\" type=\"submit\" name=\"send_t\">Track 014</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"015\" type=\"submit\" name=\"send_t\">Track 015</button><br><br>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"016\" type=\"submit\" name=\"send_t\">Track 016</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"017\" type=\"submit\" name=\"send_t\">Track 017</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"018\" type=\"submit\" name=\"send_t\">Track 018</button><br><br>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"019\" type=\"submit\" name=\"send_t\">Track 019</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"020\" type=\"submit\" name=\"send_t\">Track 020</button>\n";
+  ptr +="<button style=\"width:100px;height:32px;margin-right:10px\" value=\"021\" type=\"submit\" name=\"send_t\">Track 021</button><br><br>\n";
+  ptr +="</form></fieldset>\n";
+  ptr +="</body>\n";
+  ptr +="</html>\n";
+  return ptr;
+}
+
+void listnenOfClient(void){
+  WiFiClient client = server.available();
+  if (!client) {
+    return;
+  }
+  String req = client.readStringUntil('\r');
+  client.flush();
+  if (req.indexOf("/?send_t=001") != -1){
+  }
+  if (req.indexOf("/?send_t=002") != -1){
+  }
+}
+
+
+void handle_OnConnect()
+{
+  server.send(200, "text/html", SendHTML());
+}
+
+void handle_NotFound()
+{
+  server.send(404, "text/plain", "Not found");
+}
 
 
 void setup() {
-  Serial.begin(9600);
-  DFplayerSoftwareSerial.begin(9600);
   pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(DFBusyPin, INPUT);
-  pinMode(sensVCC, OUTPUT);
-  digitalWrite(sensVCC, 1);
+  delay(1000);
+  Serial.begin(115200);
+  DFplayerSoftwareSerial.begin(9600);
+
+  WiFi.softAP(ssid, password);
+  WiFi.softAPConfig(local_ip, gateway, subnet);
+  delay(100);
+
+  server.on("/", handle_OnConnect);
+  server.onNotFound(handle_NotFound);
+
+  server.begin();
+  Serial.println("HTTP server started");
 
   mouthServo.attach(mouthPin);
   mouthServo.write(0);
+  eyeServo.attach(eyePin);
+  eyeServo.write(0);
 
   if (!voiceDFPlayer.begin(DFplayerSoftwareSerial)) {  //Use softwareSerial to communicate with mp3.
     Serial.println(F("Unable to begin:"));
@@ -111,57 +180,24 @@ void setup() {
     }
   }
 
+  if (digitalRead(DFBusyPin)==0){voiceDFPlayer.stop();}
   voiceDFPlayer.volume(30);  //Set volume value. From 0 to 30
-  // voiceDFPlayer.play(1); //debug
-  //myDFPlayer.next(); //debug
   delay(250);
 }
 
-// the loop function runs over and over again forever
 void loop() {
-
   blink();
-  distanceMeasure();
-  player();
-  mouthPos = map(analogRead(feedback), 0, 512, 0, 180);
-  mouthServo.write(mouthPos);
+  server.handleClient();
 
-  if(dist_filtered > 10 && dist_filtered < 50){
-    status = 1;
-    phrase = 1;
+  if(digitalRead(DFBusyPin)==false){
+    eyeBlinkAnimation();
+    mouthAnimation();
+    delay(feedbackSence);
   }
-  else status = 0;
-  if(dist_filtered > 50 && dist_filtered < 100){
-    status = 3;
-    phrase = 3;
+  else {
+    mouthServo.write(0);
+    eyeServo.write(0);
   }
 
-
-
-
-  // if (millis() - timerDF > 30000) {
-  //   timerDF = millis();
-  //   phrase++;
-  //   DFplaying = false;
-  //   if (phrase > 3){
-  //     phrase=1;
-  //   }
-  // }
- //Serial.print(digitalRead(DFBusyPin));
-
-
- Serial.print("\t dist_filtered = ");
- Serial.print(dist_filtered);
- Serial.print("\t status = ");
- Serial.print(status);
- Serial.print("\t phrase = ");
- Serial.print(phrase);
- Serial.print("\t DFNotBusy = ");
- Serial.print(DFNotBusy);
- // Serial.print("\t feedback = ");
- // Serial.print(analogRead(feedback));
- // Serial.print("\t angle = ");
- // Serial.print(mouthPos);
- Serial.println();
-
+  voice();
 }
